@@ -283,12 +283,19 @@ const CAT = {
   async refresh(c, k, s, p, onProgress) {
     const f = [F('deleted_mark', false)];
     if (s) f.push(F('stock_id', s)); if (p) f.push(F('price_type_id', p));
-    const [items, bcs] = await Promise.all([
-      fetchAll('item/getext', { filters: f }, 1000, n => onProgress && onProgress(n)),
-      fetchAll('barcode/get', {}, 1000)
-    ]);
-    const slim = items.map(this.slim), codes = bcs.map(b => [b.value, b.item_id]);
-    this.build(c, slim, codes); c.ts = Date.now(); c.ready = true;
+    // Mahsulotlar kelishi bilan xabar beramiz (tarozi kodlari shtrix kodlarni kutmaydi)
+    const itemsP = fetchAll('item/getext', { filters: f }, 1000, n => onProgress && onProgress(n)).then(items => {
+      const slim = items.map(this.slim);
+      c.partial = slim;
+      window.dispatchEvent(new CustomEvent('catalog-items', { detail: { k, list: slim } }));
+      return slim;
+    });
+    // Shtrix kodlar yuklanmasa ham katalog ishlayveradi (bir daqiqadan keyin qayta uriniladi)
+    let bcOk = true;
+    const bcsP = fetchAll('barcode/get', {}, 1000).catch(() => { bcOk = false; return []; });
+    const [slim, bcs] = await Promise.all([itemsP, bcsP]);
+    const codes = bcs.map(b => [b.value, b.item_id]);
+    this.build(c, slim, codes); c.ts = bcOk ? Date.now() : Date.now() - 4 * 60e3; c.ready = true;
     IDB.set('cat2_' + k, { items: slim, codes, ts: c.ts });
     window.dispatchEvent(new CustomEvent('catalog', { detail: k }));
   },
@@ -419,7 +426,16 @@ async function resolveItem(term, stockId, priceTypeId) {
     if (r.list.length > 1) return { item: await pickItem(r.list, '«' + term + '» bo\'yicha ' + r.list.length + ' ta natija') };
   }
   const list = await findItems(term, stockId, priceTypeId);
-  if (!list.length) return { item: null, notFound: true };
+  if (!list.length) {
+    // Shtrix kod bo'lishi mumkin — to'g'ridan-to'g'ri tekshiramiz
+    const bid = /^\S{4,}$/.test(term) ? await itemByBarcode(term) : null;
+    if (bid) {
+      const f = [F('id', bid)]; if (stockId) f.push(F('stock_id', stockId)); if (priceTypeId) f.push(F('price_type_id', priceTypeId));
+      const r = await api('item/getext', { filters: f, limit: 1 });
+      if (r.result && r.result[0]) return { item: r.result[0] };
+    }
+    return { item: null, notFound: true };
+  }
   if (list.length === 1) return { item: list[0] };
   if (/^\S{6,}$/.test(term)) {
     const bid = await itemByBarcode(term);
@@ -504,6 +520,7 @@ async function screenScale() {
   let shown = [];
   const draw = () => {
     const el = $('#sres'); if (!el) return;
+    if (!lastCat) return; // katalog hali yuklanmoqda — aylanib turgan belgi qoladi
     const q = norm(query);
     let list = group ? items.filter(i => i.g === group) : items.slice();
     if (q) {
@@ -564,10 +581,13 @@ async function screenScale() {
   const c = CAT.ensure(0, 0, n => { const l = $('#sload'); if (l) l.textContent = 'Katalog yuklanmoqda: ' + n + ' ta…'; });
   const onCat = e => { if (e.detail !== CAT.key(0, 0)) return; if (!$('#sq')) return window.removeEventListener('catalog', onCat); build(CAT.store[e.detail]); };
   window.addEventListener('catalog', onCat);
+  const onItems = e => { if (!$('#sq')) return window.removeEventListener('catalog-items', onItems); if (e.detail.k === CAT.key(0, 0) && !lastCat) build({ list: e.detail.list }); };
+  window.addEventListener('catalog-items', onItems);
   await c.restoring;
   if (c.ready && $('#sq')) return build(c);
+  if (c.partial && !lastCat) build({ list: c.partial });
   if (c.loading) await c.loading;
-  if (!c.ready) { const l = $('#sload'); if (l) l.textContent = 'Katalogni yuklab bo\'lmadi. Internetni tekshiring va qayta oching.'; }
+  if (!c.ready && !lastCat) { const l = $('#sload'); if (l) l.textContent = 'Katalogni yuklab bo\'lmadi. Internetni tekshiring va qayta oching.'; }
 }
 
 // ---------- Mahsulot ma'lumoti (tannarxsiz) ----------
