@@ -81,6 +81,15 @@ header{border-bottom:4px solid var(--yel)}
 .pt .n{font-weight:600;font-size:15px;margin-top:4px;word-break:break-word}
 .pt .g{font-size:12px;color:var(--mute)}
 .sec{font-weight:700;margin:10px 2px 6px;color:var(--ink)}
+.pt{display:flex;flex-direction:column}
+.ph{width:100%;aspect-ratio:1/1;max-height:120px;border-radius:9px;background:#fff8e1;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:6px}
+.ph img{width:100%;height:100%;object-fit:contain}
+.ph .ini{font-size:34px;font-weight:800;color:#e9b949}
+.ph.none{aspect-ratio:auto;height:44px;justify-content:flex-start;padding-left:10px}
+.ph.none .ini{font-size:24px}
+.thumb{flex:0 0 44px;width:44px;height:44px;border-radius:8px;background:#fff8e1;overflow:hidden;display:flex;align-items:center;justify-content:center;font-weight:800;color:#e9b949}
+.thumb img{width:100%;height:100%;object-fit:contain}
+.bigimg{display:block;margin:0 auto 6px;width:180px;height:180px;object-fit:contain;border-radius:12px;background:#fff8e1}
 .bigcode{font-size:84px;font-weight:900;color:var(--pri);text-align:center;line-height:1;margin:10px 0;font-variant-numeric:tabular-nums;letter-spacing:2px}
 .hint{font-size:13px;color:var(--mute);background:#fff8e6;border:1px solid #f1dca6;border-radius:9px;padding:8px 10px;margin:8px 0}
 </style>
@@ -166,6 +175,12 @@ const F = (field, value, op) => ({ Field: field, Operator: op || 'Equal', Value:
 // ---------- Yordamchilar ----------
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Mahsulot rasmi: REGOS CDN havolasi (bo'lmasa — bosh harf)
+const imgOf = x => (x && (x.img || x.image_url || (x.item && x.item.image_url))) || '';
+const initial = n => esc(String(n || '?').trim().charAt(0).toUpperCase());
+function imgErr(el) { const p = el.parentNode; if (p) p.classList.add('none'); if (p) p.innerHTML = '<span class="ini">' + esc(el.dataset.i || '') + '</span>'; }
+const photo = (x, cls) => { const u = imgOf(x), n = x.item ? x.item.name : '';
+  return '<div class="' + (cls || 'ph') + (u ? '' : ' none') + '">' + (u ? '<img loading="lazy" decoding="async" alt="" src="' + esc(u) + '" data-i="' + initial(n) + '" onerror="imgErr(this)">' : '<span class="ini">' + initial(n) + '</span>') + '</div>'; };
 const fmt = (v, d) => (v == null || isNaN(v)) ? '—' : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: d == null ? 3 : d });
 let toastT;
 function toast(msg, kind) {
@@ -256,7 +271,8 @@ const CAT = {
   slim: x => ({
     item: { id: x.item.id, name: x.item.name, code: x.item.code, articul: x.item.articul, unit: x.item.unit ? { name: x.item.unit.name || x.item.unit.short_name || x.item.unit.full_name || x.item.unit.code || '' } : null, group: x.item.group ? { name: x.item.group.name } : null },
     quantity: x.quantity ? { common: x.quantity.common, booked: x.quantity.booked, allowed: x.quantity.allowed } : null,
-    price: x.price, pricetype: x.pricetype ? { name: x.pricetype.name } : null
+    price: x.price, pricetype: x.pricetype ? { name: x.pricetype.name } : null,
+    img: x.image_url || (x.item && x.item.image_url) || ''
   }),
   build(c, items, codes) {
     c.list = items; c.items = new Map(items.map(x => [x.item.id, x]));
@@ -270,7 +286,7 @@ const CAT = {
     let c = this.store[k];
     if (!c) {
       c = this.store[k] = { ready: false, ts: 0 };
-      c.restoring = IDB.get('cat2_' + k).then(saved => {
+      c.restoring = IDB.get('cat3_' + k).then(saved => {
         if (saved && !c.ready) { this.build(c, saved.items, saved.codes); c.ts = saved.ts; c.ready = true; }
       });
     }
@@ -284,7 +300,7 @@ const CAT = {
     const f = [F('deleted_mark', false)];
     if (s) f.push(F('stock_id', s)); if (p) f.push(F('price_type_id', p));
     // Mahsulotlar kelishi bilan xabar beramiz (tarozi kodlari shtrix kodlarni kutmaydi)
-    const itemsP = fetchAll('item/getext', { filters: f }, 1000, n => onProgress && onProgress(n)).then(items => {
+    const itemsP = fetchAll('item/getext', { filters: f, image_size: 'Small' }, 1000, n => onProgress && onProgress(n)).then(items => {
       const slim = items.map(this.slim);
       c.partial = slim;
       window.dispatchEvent(new CustomEvent('catalog-items', { detail: { k, list: slim } }));
@@ -296,7 +312,7 @@ const CAT = {
     const [slim, bcs] = await Promise.all([itemsP, bcsP]);
     const codes = bcs.map(b => [b.value, b.item_id]);
     this.build(c, slim, codes); c.ts = bcOk ? Date.now() : Date.now() - 4 * 60e3; c.ready = true;
-    IDB.set('cat2_' + k, { items: slim, codes, ts: c.ts });
+    IDB.set('cat3_' + k, { items: slim, codes, ts: c.ts });
     window.dispatchEvent(new CustomEvent('catalog', { detail: k }));
   },
   find(c, term) {
@@ -396,7 +412,7 @@ async function findItems(term, stockId, priceTypeId, limit) {
   const filters = [F('deleted_mark', false)];
   if (stockId) filters.push(F('stock_id', stockId));
   if (priceTypeId) filters.push(F('price_type_id', priceTypeId));
-  const j = await api('item/getext', { search: term, filters, limit: limit || 30, offset: 0 });
+  const j = await api('item/getext', { search: term, filters, limit: limit || 30, offset: 0, image_size: 'Small' });
   return j.result || [];
 }
 async function itemByBarcode(code) {
@@ -410,7 +426,7 @@ async function itemByBarcode(code) {
 function pickItem(list, title) {
   return new Promise(res => {
     const m = sheet('<h3>' + esc(title || 'Mahsulotni tanlang') + '</h3><div class="list">' + list.map((x, i) =>
-      '<div class="it" data-i="' + i + '"><div class="main"><div class="t">' + esc(x.item.name) + '</div><div class="s">Kod: ' + esc(x.item.code) + (x.item.articul ? ' · Art: ' + esc(x.item.articul) : '') + '</div></div><div class="r">' + fmt(x.quantity && x.quantity.common) + '</div></div>').join('') +
+      '<div class="it" data-i="' + i + '">' + photo(x, 'thumb') + '<div class="main"><div class="t">' + esc(x.item.name) + '</div><div class="s">Kod: ' + esc(x.item.code) + (x.item.articul ? ' · Art: ' + esc(x.item.articul) : '') + '</div></div><div class="r">' + fmt(x.quantity && x.quantity.common) + '</div></div>').join('') +
       '</div><button class="btn sec" style="margin-top:10px">Bekor qilish</button>');
     m.querySelectorAll('.it').forEach(el => el.onclick = () => { m.remove(); res(list[+el.dataset.i]); });
     m.querySelector('.btn').onclick = () => { m.remove(); res(null); };
@@ -515,7 +531,7 @@ async function screenScale() {
     });
     draw();
   };
-  const tile = i => '<div class="pt" data-id="' + i.x.item.id + '"><div class="c">' + esc(i.code) + '</div><div class="n">' + esc(i.x.item.name) + '</div>' +
+  const tile = i => '<div class="pt" data-id="' + i.x.item.id + '">' + photo(i.x) + '<div class="c">' + esc(i.code) + '</div><div class="n">' + esc(i.x.item.name) + '</div>' +
     (i.x.price != null ? '<div class="g">' + fmt(i.x.price, 2) + ' / kg</div>' : (i.g ? '<div class="g">' + esc(i.g) + '</div>' : '')) + '</div>';
   let shown = [];
   const draw = () => {
@@ -566,11 +582,17 @@ async function screenScale() {
   const open = id => {
     const i = items.find(z => z.x.item.id === id); if (!i) return;
     use[id] = (use[id] || 0) + 1; LS.set('scale_use', use);
-    const m = sheet('<div class="muted" style="text-align:center">Tarozi kodi</div><div class="bigcode">' + esc(i.code) + '</div>' +
+    const u = imgOf(i.x);
+    const m = sheet((u ? '<img class="bigimg" id="bimg" alt="" src="' + esc(u) + '" onerror="this.remove()">' : '') +
+      '<div class="muted" style="text-align:center">Tarozi kodi</div><div class="bigcode">' + esc(i.code) + '</div>' +
       '<div class="big" style="text-align:center">' + esc(i.x.item.name) + '</div>' +
       '<div class="muted" style="text-align:center;margin-top:4px">' + esc(i.g) + (i.x.price != null ? ' · ' + fmt(i.x.price, 2) + ' so\'m / kg' : '') + '</div>' +
       '<button class="btn" style="margin-top:16px">Yopish</button>');
     m.querySelector('.btn').onclick = () => { m.remove(); const s = $('#sq'); if (s) { s.select(); } };
+    if (u) api('item/getext', { filters: [F('id', id)], limit: 1, image_size: 'Medium' }).then(r => {
+      const big = r.result && r.result[0] && imgOf(r.result[0]); const el = m.querySelector('#bimg');
+      if (big && el && big !== u) { const im = new Image(); im.onload = () => { el.src = big; }; im.src = big; }
+    }).catch(() => {});
   };
 
   let t;
@@ -603,7 +625,8 @@ async function screenLookup() {
 
   const show = (x, bcs, live) => {
     const it = x.item, q = x.quantity || {}, unit = it.unit ? ' ' + esc(it.unit.name) : '';
-    $('#lres').innerHTML = '<div class="card"><div class="big">' + esc(it.name) + '</div>' +
+    const u = imgOf(x);
+    $('#lres').innerHTML = '<div class="card">' + (u ? '<img class="bigimg" alt="" src="' + esc(u) + '" onerror="this.remove()">' : '') + '<div class="big">' + esc(it.name) + '</div>' +
       '<div class="price">' + fmt(x.price, 2) + '</div><div class="muted">' + (x.pricetype ? esc(x.pricetype.name) : 'Narx') + '</div>' +
       '<div class="kv" style="margin-top:10px">' +
       '<b>Kod:</b><span>' + esc(it.code) + '</span>' + (it.articul ? '<b>Artikul:</b><span>' + esc(it.articul) + '</span>' : '') +
@@ -619,7 +642,7 @@ async function screenLookup() {
     beep(true); show(x0, null, false);
     const s = $('#ls').value, pt = $('#lp').value;
     const f = [F('id', x0.item.id)]; if (s) f.push(F('stock_id', s)); if (pt) f.push(F('price_type_id', pt));
-    const [fr, bc] = await Promise.allSettled([api('item/getext', { filters: f, limit: 1 }), api('barcode/get', { filters: [F('item_id', x0.item.id)] })]);
+    const [fr, bc] = await Promise.allSettled([api('item/getext', { filters: f, limit: 1, image_size: 'Medium' }), api('barcode/get', { filters: [F('item_id', x0.item.id)] })]);
     const x1 = (fr.status === 'fulfilled' && fr.value.result && fr.value.result[0]) || x0;
     show(x1, bc.status === 'fulfilled' ? (bc.value.result || []) : [], true);
   };
@@ -652,7 +675,7 @@ function screenBarcodes(preItem) {
         return;
       }
       const it = selected.item;
-      $('#view').innerHTML = '<div class="card"><div class="row"><div><div class="big">' + esc(it.name) + '</div><div class="muted">Kod: ' + esc(it.code) + (it.articul ? ' · Art: ' + esc(it.articul) : '') + '</div></div><button class="btn sec sm" id="chg" style="flex:0 0 auto">Boshqa</button></div></div>' +
+      $('#view').innerHTML = '<div class="card"><div class="row">' + photo(selected, 'thumb') + '<div style="flex:1;min-width:0"><div class="big">' + esc(it.name) + '</div><div class="muted">Kod: ' + esc(it.code) + (it.articul ? ' · Art: ' + esc(it.articul) : '') + '</div></div><button class="btn sec sm" id="chg" style="flex:0 0 auto">Boshqa</button></div></div>' +
         '<div class="card"><b>Mavjud shtrix kodlar</b><div class="list" id="bcl"><div class="empty">Yuklanmoqda…</div></div></div>' +
         '<div class="card"><b>2. Yangi shtrix kod</b>' +
         '<label>Shtrix kod turi</label><select id="bt">' + opts(types, defType()) + '</select>' +
