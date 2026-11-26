@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<meta name="theme-color" content="#d62828">
+<meta name="theme-color" content="#d32f2f">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>MarketX</title>
 <style>
-:root{--bg:#fff8ec;--card:#fff;--ink:#1f1a17;--mute:#7a6f66;--line:#f0e2cc;--pri:#d62828;--pri2:#ffb703;--yel:#ffd23f;--ok:#1e7d4f;--bad:#b3261e;--warn:#9a6700}
+:root{--bg:#fff8ec;--card:#fff;--ink:#1f1a17;--mute:#7a6f66;--line:#f0e2cc;--pri:#d32f2f;--pri2:#ffb703;--yel:#ffd23f;--ok:#1e7d4f;--bad:#b3261e;--warn:#9a6700}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-tap-highlight-color:transparent}
@@ -90,6 +90,18 @@ header{border-bottom:4px solid var(--yel)}
 .thumb{flex:0 0 44px;width:44px;height:44px;border-radius:8px;background:#fff8e1;overflow:hidden;display:flex;align-items:center;justify-content:center;font-weight:800;color:#e9b949}
 .thumb img{width:100%;height:100%;object-fit:contain}
 .bigimg{display:block;margin:0 auto 6px;width:180px;height:180px;object-fit:contain;border-radius:12px;background:#fff8e1}
+.bar{height:8px;background:#f3e6cf;border-radius:6px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#f4a300);border-radius:6px}
+.tk.okd{opacity:.65}
+.rph{display:block;margin-top:6px;max-width:160px;max-height:160px;border-radius:8px;background:#f3e6cf;cursor:zoom-in;min-width:60px;min-height:60px}
+.bonus{flex:0 0 auto;background:#fff4d1;color:#8a5a00;border:1px solid #f1d58a;border-radius:10px;padding:4px 8px;font-weight:700;font-size:14px;margin-left:6px}
+details.emp{border-top:1px solid var(--line);padding:8px 0}
+details.emp summary{cursor:pointer;list-style:none}
+details.emp summary::-webkit-details-marker{display:none}
+#ttabs,#atabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow:visible}
+#ttabs .chip,#atabs .chip{text-align:center;white-space:normal;padding:8px 4px;line-height:1.25;border-radius:12px}
+#ttabs .chip b{display:block;font-size:13px}
+.tbadge{display:inline-block;background:var(--pri);color:#fff;border-radius:12px;padding:1px 8px;font-size:13px;margin-left:6px;vertical-align:middle}
 .bigcode{font-size:84px;font-weight:900;color:var(--pri);text-align:center;line-height:1;margin:10px 0;font-variant-numeric:tabular-nums;letter-spacing:2px}
 .hint{font-size:13px;color:var(--mute);background:#fff8e6;border:1px solid #f1dca6;border-radius:9px;padding:8px 10px;margin:8px 0}
 </style>
@@ -433,7 +445,53 @@ function pickItem(list, title) {
   });
 }
 // 1) Telefondagi katalog (so'rovsiz). 2) Topilmasa — REGOS'ga so'rov.
+// ---------- Markirovka (Asl belgisi, DataMatrix) ----------
+// GS1 ko'rinishi: 01 + GTIN(14) + 21 + seriya ... ; tamaki qutisi: GTIN(14) + seriya (25–30 belgi).
+// Natija: mahsulot shtrix kodi (EAN-13 va boshqa variantlar).
+function parseMark(raw) {
+  let s = String(raw || '').trim().replace(/^\][a-zA-Z]\d/, '');      // skaner prefiksi: ]d2, ]C1, ]Q3
+  s = s.replace(/^[\x1d␝~]+/, '');
+  let g = null;
+  const par = s.match(/^\(01\)\s*(\d{14})/);                          // (01)04780000000017(21)...
+  if (par) g = par[1];
+  else if (/^01\d{14}/.test(s) && s.length >= 18) g = s.slice(2, 16);  // 0104780000000017 21....
+  else if (/^\d{14}/.test(s) && s.length >= 21 && s.length <= 40 && /\D/.test(s.slice(14))) g = s.slice(0, 14); // tamaki
+  if (!g) return null;
+  const cands = [];
+  for (const v of [g, g.replace(/^0/, ''), g.replace(/^0+/, '')]) if (v.length >= 8 && !cands.includes(v)) cands.push(v);
+  const ean = g.length === 14 && g[0] === '0' ? g.slice(1) : g;       // biriktirish uchun asosiy ko'rinish
+  return { gtin: g, ean, cands };
+}
+const isMark = t => !!parseMark(t);
+// Markirovka bo'yicha mahsulotni topish: avval telefondagi katalog, keyin REGOS
+async function itemByMark(mk, stockId, priceTypeId) {
+  const want = CAT.peek(stockId, priceTypeId);
+  for (const k in CAT.store) {
+    const c = CAT.store[k]; if (!c.ready) continue;
+    for (const v of mk.cands) {
+      const id = c.byCode.get(v); if (!id) continue;
+      const x = (want && want.items.get(id)) || c.items.get(id);  // tanlangan ombor/narx turidagi ma'lumot afzal
+      if (x) return { item: x, code: v };
+    }
+  }
+  for (const v of mk.cands) {
+    const bid = await itemByBarcode(v);
+    if (bid) {
+      const f = [F('id', bid)]; if (stockId) f.push(F('stock_id', stockId)); if (priceTypeId) f.push(F('price_type_id', priceTypeId));
+      const r = await api('item/getext', { filters: f, limit: 1, image_size: 'Small' });
+      if (r.result && r.result[0]) return { item: r.result[0], code: v };
+    }
+  }
+  return null;
+}
+
 async function resolveItem(term, stockId, priceTypeId) {
+  const c0 = CAT.peek(stockId, priceTypeId);
+  const mk = c0 && c0.byCode.has(term) ? null : parseMark(term); // mavjud oddiy shtrix kod — markirovka emas
+  if (mk) {
+    const hit = await itemByMark(mk, stockId, priceTypeId);
+    return hit ? { item: hit.item, mark: mk } : { item: null, notFound: true, mark: mk };
+  }
   const c = CAT.peek(stockId, priceTypeId);
   if (c) {
     const r = CAT.find(c, term);
@@ -472,8 +530,14 @@ async function screenHome() {
     '<div class="tile" data-k="scale"><span class="ic">⚖️</span>Tarozi kodlari<div class="muted">Vazn bilan sotiladigan mahsulotlar kodi</div></div>' +
     '<div class="tile y" data-k="lookup"><span class="ic">🔎</span>Mahsulot ma\'lumoti<div class="muted">Narx, qoldiq va shtrix kodlar</div></div>' +
     '<div class="tile" data-k="barcode"><span class="ic">🏷️</span>Shtrix kod qo\'shish<div class="muted">Mahsulotga yangi shtrix kod biriktirish</div></div>' +
+    '<div class="tile y" data-k="tasks"><span class="ic">📋</span>Vazifalar<span id="tcount"></span><div class="muted">Kunlik ro\'yxat, topshiriqlar va oylik bonuslar</div></div>' +
     '</div>';
-  $('#view').querySelectorAll('.tile').forEach(t => t.onclick = () => { const k = t.dataset.k; if (k === 'scale') go(screenScale); else if (k === 'lookup') go(screenLookup); else go(screenBarcodes()); });
+  $('#view').querySelectorAll('.tile').forEach(t => t.onclick = () => { const k = t.dataset.k; if (k === 'scale') go(screenScale); else if (k === 'lookup') go(screenLookup); else if (k === 'tasks') go(screenTasks); else go(screenBarcodes()); });
+  // Bajarilmagan vazifalar soni
+  tapi('my').then(d => {
+    const n = d.checklist.filter(x => !x.rep || x.rep.st === 'ret').length + d.tasks.filter(x => !x.rep || x.rep.st === 'ret').length;
+    const el = $('#tcount'); if (el && n) el.outerHTML = '<span class="tbadge">' + n + '</span>';
+  }).catch(() => {});
   CAT.ensure(0, 0); // katalogni oldindan tayyorlab qo'yamiz
   api('stock/get', { limit: 1 }).then(() => { const sp = document.querySelector('.banner span'); if (sp && LS.get('me', '')) sp.textContent = '👤 ' + LS.get('me', ''); }).catch(() => {});
 }
@@ -634,10 +698,12 @@ async function screenLookup() {
       '<b>Qoldiq:</b><span>' + fmt(q.common) + unit + '</span>' +
       '<b>Band:</b><span>' + fmt(q.booked) + '</span><b>Mavjud:</b><span>' + fmt(q.allowed) + unit + '</span>' +
       '<b>Shtrix kodlar:</b><span style="font-family:ui-monospace,monospace">' + (bcs ? (bcs.map(b => esc(b.value)).join('<br>') || '—') : '…') + '</span></div>' +
+      (lastMark ? '<div class="hint">📦 Markirovka orqali topildi · GTIN ' + esc(lastMark.gtin) + '</div>' : '') +
       (live ? '' : '<div class="muted" style="margin-top:4px">⏳ Qoldiq yangilanmoqda…</div>') +
       '<button class="btn sec" id="tobc" style="margin-top:10px">🏷️ Shtrix kod qo\'shish</button></div>';
     $('#tobc').onclick = () => go(screenBarcodes(x));
   };
+  let lastMark = null;
   const showItem = async x0 => {
     beep(true); show(x0, null, false);
     const s = $('#ls').value, pt = $('#lp').value;
@@ -648,9 +714,16 @@ async function screenLookup() {
   };
   setScan(term => busy(null, async () => {
     const r = await resolveItem(term, $('#ls').value, $('#lp').value);
+    lastMark = r.mark || null;
     if (r.item) return showItem(r.item);
     if (!r.notFound) return;
     beep(false);
+    if (r.mark) {
+      $('#lres').innerHTML = '<div class="card empty">📦 Markirovka o\'qildi<div class="big" style="font-family:ui-monospace,monospace;margin:6px 0">' + esc(r.mark.ean) + '</div>' +
+        'Bu shtrix kod hech qaysi mahsulotga biriktirilmagan.<p class="muted">Mahsulotni tanlang — shtrix kod unga qo\'shiladi va keyingi safar markirovka ham, oddiy shtrix kod ham shu mahsulotni topadi.</p><button class="btn" id="att">🏷️ Mahsulotga biriktirish</button></div>';
+      $('#att').onclick = async () => { const x = await attachFlow(r.mark.ean, $('#ls').value, $('#lp').value); if (x) showItem(x); };
+      return;
+    }
     $('#lres').innerHTML = '<div class="card empty">«' + esc(term) + '» topilmadi' +
       (looksLikeCode(term) ? '<p class="muted">Bu yangi shtrix kod bo\'lishi mumkin.</p><button class="btn" id="att">🏷️ Mahsulotga biriktirish</button>' : '') + '</div>';
     if ($('#att')) $('#att').onclick = async () => { const x = await attachFlow(term, $('#ls').value, $('#lp').value); if (x) showItem(x); };
@@ -684,9 +757,10 @@ function screenBarcodes(preItem) {
         '<div class="row" style="margin-top:8px"><button class="btn sec" id="gen">EAN-13 yaratish</button><button class="btn" id="add">Qo\'shish</button></div></div>';
       $('#chg').onclick = () => { selected = null; render(); };
       $('#bt').onchange = () => LS.set('bctype', $('#bt').value);
+      const fromMark = v => { const mk = parseMark(v); if (mk) { $('#bv').value = mk.ean; toast('📦 Markirovkadan shtrix kod olindi: ' + mk.ean, 'ok'); return mk.ean; } return v; };
       $('#bv').addEventListener('input', () => checkValue($('#bv').value));
-      $('#bv').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#add').click(); } });
-      $('#bcam').onclick = async () => { const v = await cameraScan(); if (v) { $('#bv').value = v; checkValue(v); } };
+      $('#bv').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (isMark($('#bv').value)) { checkValue(fromMark($('#bv').value)); return; } $('#add').click(); } });
+      $('#bcam').onclick = async () => { const v = await cameraScan(); if (v) { $('#bv').value = v; checkValue(fromMark(v)); } };
       $('#gen').onclick = e => busy(e.currentTarget, async () => {
         const j = await api('barcode/generateean13', {});
         $('#bv').value = String(j.result.value);
@@ -750,6 +824,15 @@ function screenBarcodes(preItem) {
     };
 
     const onSearch = term => busy(null, async () => {
+      const mk = parseMark(term);
+      if (mk) {
+        const hit = await itemByMark(mk);
+        if (hit) { selected = hit.item; beep(true); return render(); }
+        beep(false);
+        const att = await attachFlow(mk.ean);
+        if (att) { selected = att; render(); }
+        return;
+      }
       const c = CAT.peek(0, 0);
       if (c) {
         const r = CAT.find(c, term);
@@ -816,7 +899,7 @@ function attachFlow(code, stockId, ptId) {
 // ADMINISTRATOR: xodimlar kodlari va jurnal
 // =========================================================
 const dt = t => t ? new Date(t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-const ACTS = { barcode_add: '🏷️ Shtrix kod qo\'shdi', emp_add: '➕ Xodim qo\'shildi', emp_close: '🔒 Kirish yopildi', emp_open: '🔓 Kirish ochildi', emp_newcode: '🔄 Yangi kod berildi', emp_delete: '🗑️ Xodim o\'chirildi' };
+const ACTS = { barcode_add: '🏷️ Shtrix kod qo\'shdi', emp_add: '➕ Xodim qo\'shildi', emp_close: '🔒 Kirish yopildi', emp_open: '🔓 Kirish ochildi', emp_newcode: '🔄 Yangi kod berildi', emp_delete: '🗑️ Xodim o\'chirildi', task_add: '📌 Topshiriq berildi', bonus_on: '🎁 Bonus berildi', bonus_off: '✖️ Bonus bekor qilindi' };
 async function screenAdmin() {
   setTitle('Administrator');
   if (!serverUrl()) { $('#view').innerHTML = '<div class="card empty">Avval sozlamalarda server manzilini kiriting.</div>'; return; }
@@ -825,6 +908,8 @@ async function screenAdmin() {
     '<div class="card"><div class="row"><b style="flex:1">Xodimlar</b><span class="muted" id="ecnt"></span></div><div class="list" id="el"><div class="empty"><span class="spin dk"></span></div></div></div>' +
     '<div class="card"><b>Jurnal</b><div class="muted">Oxirgi 100 ta amal (90 kun saqlanadi)</div><div class="list" id="lg"><div class="empty"><span class="spin dk"></span></div></div></div>' +
     '<button class="btn sec" id="alo">Administrator rejimidan chiqish</button>';
+  $('#view').insertAdjacentHTML('afterbegin', '<button class="btn" id="atk" style="margin-bottom:10px">📋 Vazifalar boshqaruvi</button>');
+  $('#atk').onclick = () => go(screenTasksAdmin);
   $('#alo').onclick = () => { ADMIN = ''; LS.set('admin', ''); toast('Chiqildi', 'ok'); back(); };
   const showCode = (e, title) => {
     const m = sheet('<h3>' + esc(title) + '</h3><div class="muted" style="text-align:center">' + esc(e.name) + ' uchun shaxsiy kod</div><div class="bigcode">' + esc(e.code) + '</div>' +
@@ -882,6 +967,313 @@ function adminLogin() {
     if ($('#arm').checked) LS.set('admin', ADMIN);
     screenAdmin();
   });
+}
+
+// =========================================================
+// VAZIFALAR — kunlik ro'yxat, topshiriqlar, oylik maqsadlar
+// =========================================================
+async function postJson(path, body, admin) {
+  const s = serverUrl();
+  if (!s) throw new ApiError('Avval sozlamalarda server manzilini kiriting');
+  const usedKey = CFG.key;
+  const headers = { 'Content-Type': 'application/json;charset=utf-8' };
+  if (admin) headers['X-Admin-Key'] = ADMIN; else if (CFG.key) headers['X-Access-Key'] = CFG.key;
+  let res;
+  try { res = await fetch(s + path, { method: 'POST', headers, body: JSON.stringify(body || {}) }); }
+  catch (e) { throw new ApiError('Server bilan ulanib bo\'lmadi. Internetni tekshiring.'); }
+  let j; try { j = await res.json(); } catch (e) { throw new ApiError('Server javobini o\'qib bo\'lmadi (HTTP ' + res.status + ')'); }
+  if (!j.ok) {
+    const r = j.result || {};
+    if (!admin && r.error === 401 && usedKey && usedKey === LS.get('cfg', {}).key) lockOut(r.description);
+    throw new ApiError(r.description || 'Xato', r.error);
+  }
+  return j.result;
+}
+const tapi = (a, b) => postJson('/tasks/' + a, b, false);
+const tadm = (a, b) => postJson('/admin/t_' + a, b, true);
+
+// Rasmlar: sarlavha bilan yuklab olinadi va blob sifatida ko'rsatiladi
+const PHOTOS = new Map();
+async function photoUrl(key, admin) {
+  if (PHOTOS.has(key)) return PHOTOS.get(key);
+  const s = serverUrl();
+  const headers = { 'Content-Type': 'application/json' };
+  if (admin) headers['X-Admin-Key'] = ADMIN; else headers['X-Access-Key'] = CFG.key;
+  const p = fetch(s + (admin ? '/admin/t_photo' : '/tasks/photo'), { method: 'POST', headers, body: JSON.stringify({ key }) })
+    .then(r => r.ok && /image/.test(r.headers.get('Content-Type') || '') ? r.blob() : null)
+    .then(b => b ? URL.createObjectURL(b) : null).catch(() => null);
+  PHOTOS.set(key, p); return p;
+}
+function loadPhotos(root, admin) {
+  root.querySelectorAll('img[data-pk]').forEach(async im => {
+    const u = await photoUrl(im.dataset.pk, admin);
+    if (u) { im.src = u; im.onclick = () => { const m = sheet('<img src="' + u + '" style="width:100%;border-radius:10px"><button class="btn" style="margin-top:10px">Yopish</button>'); m.querySelector('.btn').onclick = () => m.remove(); }; }
+    else im.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '🖼️ rasm o\'chirilgan' }));
+  });
+}
+const phImg = k => k ? '<img class="rph" data-pk="' + esc(k) + '" alt="">' : '';
+
+// Kameradan rasm olish va siqish (~150–300 KB)
+function pickPhoto() {
+  return new Promise(res => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+    inp.style.display = 'none'; document.body.appendChild(inp);
+    inp.onchange = () => { const f = inp.files && inp.files[0]; inp.remove(); res(f || null); };
+    inp.click();
+  });
+}
+function compress(file, max, q) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      let w = im.naturalWidth, h = im.naturalHeight; const k = Math.min(1, (max || 1280) / Math.max(w, h));
+      w = Math.round(w * k); h = Math.round(h * k);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(im, 0, 0, w, h); URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', q || 0.72));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Rasmni ochib bo\'lmadi')); };
+    im.src = url;
+  });
+}
+const tm = t => t ? new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+const dshort = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) : '';
+const ST = { done: ['⏳', 'Tekshiruvda', '#9a6700'], ok: ['✅', 'Qabul qilindi', 'var(--ok)'], ret: ['↩️', 'Qaytarildi', 'var(--bad)'] };
+const stBadge = r => { const s = ST[r.st] || ST.done; return '<span class="pill" style="background:#fff;border:1px solid ' + s[2] + ';color:' + s[2] + '">' + s[0] + ' ' + s[1] + '</span>'; };
+const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
+const monName = m => m ? MONTHS[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4) : '';
+
+// Hisobot oynasi: izoh, rasm (majburiy yoki ixtiyoriy), oylik uchun miqdor
+function reportSheet(opt) {
+  return new Promise(res => {
+    let photo = null;
+    const m = sheet('<h3>' + esc(opt.title) + '</h3>' + (opt.desc ? '<p class="muted" style="margin-top:0">' + esc(opt.desc) + '</p>' : '') +
+      (opt.qty ? '<label>Miqdor' + (opt.unit ? ' (' + esc(opt.unit) + ')' : '') + '</label><input id="rq" type="number" inputmode="decimal" min="0" step="any" value="1">' : '') +
+      '<label>Izoh ' + '<span class="muted">(ixtiyoriy)</span></label><input id="rn" maxlength="500" autocomplete="off" placeholder="Masalan: hammasi joyida">' +
+      '<label>Rasm ' + (opt.photo ? '<b style="color:var(--bad)">— majburiy</b>' : '<span class="muted">(ixtiyoriy)</span>') + '</label>' +
+      '<div id="rpv" style="margin:6px 0"></div><button class="btn sec" id="rph">📷 Rasmga olish</button>' +
+      '<div class="row" style="margin-top:12px"><button class="btn sec" id="rx">Bekor qilish</button><button class="btn" id="rs">Yuborish</button></div>');
+    m.querySelector('#rph').onclick = async () => {
+      const f = await pickPhoto(); if (!f) return;
+      try { photo = await compress(f); m.querySelector('#rpv').innerHTML = '<img src="' + photo + '" style="max-width:100%;max-height:220px;border-radius:10px">'; m.querySelector('#rph').textContent = '📷 Qayta olish'; }
+      catch (e) { toast(e.message, 'bad'); }
+    };
+    m.querySelector('#rx').onclick = () => { m.remove(); res(null); };
+    m.querySelector('#rs').onclick = () => {
+      if (opt.photo && !photo) return toast('Rasm majburiy — 📷 tugmasini bosing', 'bad');
+      const r = { note: m.querySelector('#rn').value.trim(), photo };
+      if (opt.qty) { r.n = Number(m.querySelector('#rq').value); if (!(r.n > 0)) return toast('Miqdorni kiriting', 'bad'); }
+      m.remove(); res(r);
+    };
+  });
+}
+
+// ---------- Xodim ekrani ----------
+async function screenTasks() {
+  setTitle('Vazifalar');
+  let tab = LS.get('ttab', 'd'), data = null;
+  $('#view').innerHTML = '<div class="chips" id="ttabs" style="padding-top:0;margin-bottom:10px"></div><div id="tbody"><div class="empty"><span class="spin dk"></span></div></div>';
+  const load = async () => {
+    try { data = await tapi('my'); } catch (e) { $('#tbody').innerHTML = '<div class="card empty">❌ ' + esc(e.message) + '</div>'; return; }
+    draw();
+  };
+  const counts = () => {
+    const cd = data.checklist.filter(x => x.rep && x.rep.st !== 'ret').length;
+    const tp = data.tasks.filter(x => !x.rep || x.rep.st === 'ret').length;
+    return { d: cd + '/' + data.checklist.length, t: tp ? tp + ' ta' : '✓', m: data.goals.length };
+  };
+  const draw = () => {
+    const c = counts();
+    $('#ttabs').innerHTML = [['d', '✅ Kunlik', c.d], ['t', '📌 Topshiriq', c.t], ['m', '🏆 Oylik', c.m + ' ta']].map(([k, n, b]) =>
+      '<div class="chip' + (tab === k ? ' on' : '') + '" data-t="' + k + '">' + n + ' <b>' + b + '</b></div>').join('');
+    $('#ttabs').querySelectorAll('.chip').forEach(ch => ch.onclick = () => { tab = ch.dataset.t; LS.set('ttab', tab); draw(); });
+    const el = $('#tbody');
+    if (tab === 'd') {
+      const done = data.checklist.filter(x => x.rep && x.rep.st !== 'ret').length, all = data.checklist.length;
+      el.innerHTML = '<div class="card"><div class="row"><b style="flex:1">Bugun, ' + dshort(data.date) + '</b><span class="muted">' + done + ' / ' + all + '</span></div>' +
+        '<div class="bar"><i style="width:' + (all ? Math.round(done / all * 100) : 0) + '%"></i></div></div>' +
+        (all ? data.checklist.map(x => card(x, 'd')).join('') : '<div class="card empty">Bugungi ro\'yxat bo\'sh</div>');
+    } else if (tab === 't') {
+      el.innerHTML = data.tasks.length ? data.tasks.slice().sort((a, b) => (a.rep && a.rep.st === 'ok') - (b.rep && b.rep.st === 'ok') || (a.due || '9').localeCompare(b.due || '9')).map(x => card(x, 't')).join('')
+        : '<div class="card empty">Hozircha topshiriq yo\'q 👍</div>';
+    } else {
+      el.innerHTML = '<div class="muted" style="margin:10px 2px 8px">' + esc(monName(data.month)) + ' oyi maqsadlari</div>' +
+        (data.goals.length ? data.goals.map(goalCard).join('') : '<div class="card empty">Bu oy uchun maqsad belgilanmagan</div>');
+    }
+    el.querySelectorAll('[data-do]').forEach(b => b.onclick = () => act(b));
+    loadPhotos(el, false);
+  };
+  const card = (x, kind) => {
+    const r = x.rep, overdue = kind === 't' && x.due && x.due < data.date && !(r && r.st !== 'ret');
+    const icon = !r ? '⬜' : (ST[r.st] || ST.done)[0];
+    return '<div class="card tk' + (r && r.st === 'ok' ? ' okd' : '') + '"><div class="row" style="align-items:flex-start"><div style="flex:0 0 28px;font-size:22px">' + icon + '</div><div style="flex:1;min-width:0">' +
+      '<div class="t" style="font-weight:600">' + esc(x.title) + '</div>' + (x.desc ? '<div class="muted">' + esc(x.desc) + '</div>' : '') +
+      '<div style="margin-top:4px">' + (x.photo ? '<span class="pill">📷 rasm kerak</span> ' : '') + (kind === 't' && x.due ? '<span class="pill" style="' + (overdue ? 'background:#fde2e1;color:var(--bad)' : '') + '">📅 ' + dshort(x.due) + '</span> ' : '') + (r ? stBadge(r) : '') + '</div>' +
+      (r ? '<div class="muted" style="margin-top:4px">' + tm(r.t) + (r.note ? ' · ' + esc(r.note) : '') + '</div>' + phImg(r.ph) : '') +
+      (r && r.st === 'ret' && r.rc ? '<div class="hint" style="background:#fde2e1;border-color:#f5b5b1">Administrator: ' + esc(r.rc) + '</div>' : '') +
+      '</div></div>' +
+      (!r || r.st === 'ret' ? '<button class="btn" data-do="rep" data-k="' + kind + '" data-id="' + x.id + '" style="margin-top:8px">✔️ Bajarildi</button>'
+        : r.st === 'done' ? '<button class="btn sec sm" data-do="undo" data-k="' + kind + '" data-id="' + x.id + '" style="margin-top:8px">Bekor qilish</button>' : '') + '</div>';
+  };
+  const goalCard = g => {
+    const pct = Math.min(100, Math.round(g.sum / g.target * 100));
+    return '<div class="card tk"><div class="row" style="align-items:flex-start"><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">' + esc(g.title) + '</div>' + (g.desc ? '<div class="muted">' + esc(g.desc) + '</div>' : '') + '</div>' +
+      (g.bonus ? '<div class="bonus">🎁 ' + esc(g.bonus) + '</div>' : '') + '</div>' +
+      '<div class="row" style="margin-top:8px"><div class="bar" style="flex:1"><i style="width:' + pct + '%"></i></div><b style="flex:0 0 auto">' + fmt(g.sum) + ' / ' + fmt(g.target) + (g.unit ? ' ' + esc(g.unit) : '') + '</b></div>' +
+      (g.award ? '<div class="hint" style="background:#dff3e8;border-color:#a8dcbf">🎉 Bonus tasdiqlandi!</div>' : pct >= 100 ? '<div class="hint">🔥 Maqsad bajarildi — administrator tasdiqlashini kuting</div>' : '') +
+      (g.entries.length ? '<div class="list" style="margin-top:6px">' + g.entries.slice().reverse().map(e => '<div class="it" style="cursor:default;align-items:flex-start"><div class="main"><div class="s">' + new Date(e.t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' · <b style="color:var(--ink)">+' + fmt(e.n) + '</b> ' + stBadge(e) + '</div>' +
+        (e.note ? '<div class="s">' + esc(e.note) + '</div>' : '') + (e.st === 'ret' && e.rc ? '<div class="s" style="color:var(--bad)">Administrator: ' + esc(e.rc) + '</div>' : '') + phImg(e.ph) + '</div>' +
+        (e.st === 'done' && !g.award ? '<button class="btn sec sm" data-do="undo" data-k="m" data-id="' + g.id + '" data-e="' + e.id + '">✕</button>' : '') + '</div>').join('') + '</div>' : '') +
+      (g.award ? '' : '<button class="btn" data-do="rep" data-k="m" data-id="' + g.id + '" style="margin-top:8px">➕ Hisobot qo\'shish</button>') + '</div>';
+  };
+  const act = async b => {
+    const kind = b.dataset.k, id = b.dataset.id;
+    const src = kind === 'd' ? data.checklist : kind === 't' ? data.tasks : data.goals;
+    const x = src.find(z => z.id === id); if (!x) return;
+    if (b.dataset.do === 'undo') {
+      if (!await confirmBox('Hisobot bekor qilinsinmi?', 'Bekor qilish')) return;
+      return busy(b, async () => { await tapi('undo', { kind, id, entry: b.dataset.e }); await load(); });
+    }
+    const r = await reportSheet({ title: x.title, desc: x.desc, photo: x.photo, qty: kind === 'm', unit: x.unit });
+    if (!r) return;
+    await busy(b, async () => {
+      await tapi('report', Object.assign({ kind, id }, r));
+      beep(true); toast(kind === 'm' ? 'Hisobot qo\'shildi' : 'Bajarildi ✔️', 'ok'); await load();
+    });
+  };
+  await load();
+}
+
+// ---------- Administrator: vazifalarni boshqarish ----------
+async function screenTasksAdmin() {
+  setTitle('Vazifalar boshqaruvi');
+  if (!ADMIN) return adminLogin();
+  let tab = LS.get('tatab', 'd'), data = null, date = '', month = '';
+  $('#view').innerHTML = '<div class="chips" id="atabs" style="padding-top:0;margin-bottom:10px"></div><div id="abody"><div class="empty"><span class="spin dk"></span></div></div>';
+  const load = async () => {
+    try { data = await tadm('get', { date, month }); date = data.date; month = data.month; }
+    catch (e) { $('#abody').innerHTML = '<div class="card empty">❌ ' + esc(e.message) + '</div>'; return; }
+    draw();
+  };
+  const emps = () => data.employees.filter(e => e.active);
+  const assignees = x => !x.who || x.who === 'all' ? emps() : data.employees.filter(e => x.who.includes(e.id));
+  const whoText = x => !x.who || x.who === 'all' ? 'Hammaga' : assignees(x).map(e => e.name).join(', ') || '—';
+  const revBtns = (kind, emp, id, entry, r) => r.st === 'done' || r.st === 'ret' || r.st === 'ok'
+    ? '<div class="row" style="margin-top:6px">' + (r.st !== 'ok' ? '<button class="btn sm" data-rv="ok" data-k="' + kind + '" data-emp="' + emp + '" data-id="' + id + '"' + (entry ? ' data-e="' + entry + '"' : '') + '>✅ Qabul</button>' : '') +
+      (r.st !== 'ret' ? '<button class="btn sm sec" data-rv="ret" data-k="' + kind + '" data-emp="' + emp + '" data-id="' + id + '"' + (entry ? ' data-e="' + entry + '"' : '') + ' style="color:var(--bad);border-color:var(--bad)">↩️ Qaytarish</button>' : '') + '</div>' : '';
+  const repLine = (r) => '<div class="s">' + tm(r.t) + ' ' + stBadge(r) + (r.note ? ' · ' + esc(r.note) : '') + '</div>' + (r.rc ? '<div class="s" style="color:var(--bad)">Izoh: ' + esc(r.rc) + '</div>' : '') + phImg(r.ph);
+
+  const draw = () => {
+    $('#atabs').innerHTML = [['d', '✅ Kunlik'], ['t', '📌 Topshiriq'], ['m', '🏆 Oylik']].map(([k, n]) => '<div class="chip' + (tab === k ? ' on' : '') + '" data-t="' + k + '">' + n + '</div>').join('');
+    $('#atabs').querySelectorAll('.chip').forEach(ch => ch.onclick = () => { tab = ch.dataset.t; LS.set('tatab', tab); draw(); });
+    const el = $('#abody'); let h = '';
+    if (tab === 'd') {
+      h += '<div class="card"><div class="row"><b style="flex:1">Ro\'yxat bandlari</b><button class="btn sm" id="add">➕ Qo\'shish</button></div>' +
+        (data.checklist.length ? '<div class="list">' + data.checklist.map(x => '<div class="it" style="cursor:default"><div class="main"><div class="t">' + (x.active === false ? '⏸️ ' : '') + esc(x.title) + '</div><div class="s">' + (x.photo ? '📷 · ' : '') + esc(whoText(x)) + '</div></div>' +
+          '<button class="btn sm sec" data-ed="cl" data-id="' + x.id + '">✏️</button></div>').join('') + '</div>' : '<div class="empty">Hali band yo\'q. Masalan: «Vitrinani artish», «Sut mahsulotlari muddatini tekshirish».</div>') + '</div>';
+      h += '<div class="card"><div class="row"><b style="flex:1">Bajarilishi</b><input type="date" id="dt" value="' + date + '" max="' + data.today + '" style="flex:0 0 auto;width:auto;padding:6px"></div>';
+      const items = data.checklist.filter(x => x.active !== false);
+      h += emps().map(e => {
+        const rep = (data.reports[e.id] || {}).d || {};
+        const mine = items.filter(x => !x.who || x.who === 'all' || x.who.includes(e.id));
+        const n = mine.filter(x => rep[x.id] && rep[x.id].st !== 'ret').length;
+        return '<details class="emp"><summary><b>' + esc(e.name) + '</b> <span class="muted">' + n + ' / ' + mine.length + '</span><div class="bar"><i style="width:' + (mine.length ? Math.round(n / mine.length * 100) : 0) + '%"></i></div></summary>' +
+          mine.map(x => { const r = rep[x.id]; return '<div class="it" style="cursor:default;align-items:flex-start"><div style="flex:0 0 24px">' + (r ? (ST[r.st] || ST.done)[0] : '⬜') + '</div><div class="main"><div class="t">' + esc(x.title) + '</div>' + (r ? repLine(r) + revBtns('d', e.id, x.id, '', r) : '<div class="s">bajarilmagan</div>') + '</div></div>'; }).join('') + '</details>';
+      }).join('') || '<div class="empty">Faol xodim yo\'q</div>';
+      h += '</div>';
+    } else if (tab === 't') {
+      h += '<button class="btn" id="add" style="margin-bottom:10px">➕ Yangi topshiriq</button>';
+      h += data.tasks.length ? data.tasks.slice().sort((a, b) => a.closed - b.closed || b.created - a.created).map(x => {
+        const as = assignees(x);
+        const done = as.filter(e => { const r = ((data.reports[e.id] || {}).t || {})[x.id]; return r && r.st === 'ok'; }).length;
+        return '<div class="card tk' + (x.closed ? ' okd' : '') + '"><div class="row" style="align-items:flex-start"><div style="flex:1;min-width:0"><div style="font-weight:700">' + (x.closed ? '🔒 ' : '') + esc(x.title) + '</div>' + (x.desc ? '<div class="muted">' + esc(x.desc) + '</div>' : '') +
+          '<div class="s muted">' + (x.due ? '📅 ' + dshort(x.due) + ' · ' : '') + (x.photo ? '📷 · ' : '') + esc(whoText(x)) + ' · ✅ ' + done + '/' + as.length + '</div></div>' +
+          '<button class="btn sm sec" data-ed="task" data-id="' + x.id + '" style="flex:0 0 auto">✏️</button></div>' +
+          '<div class="list">' + as.map(e => { const r = ((data.reports[e.id] || {}).t || {})[x.id]; return '<div class="it" style="cursor:default;align-items:flex-start"><div style="flex:0 0 24px">' + (r ? (ST[r.st] || ST.done)[0] : '⬜') + '</div><div class="main"><div class="t">' + esc(e.name) + '</div>' + (r ? repLine(r) + revBtns('t', e.id, x.id, '', r) : '<div class="s">hali bajarilmagan</div>') + '</div></div>'; }).join('') + '</div>' +
+          '<button class="btn sm sec" data-close="' + x.id + '" data-c="' + (x.closed ? '0' : '1') + '" style="margin-top:6px">' + (x.closed ? '🔓 Qayta ochish' : '🔒 Yopish (xodimlardan yashirish)') + '</button></div>';
+      }).join('') : '<div class="card empty">Topshiriq yo\'q</div>';
+    } else {
+      h += '<div class="card"><div class="row"><b style="flex:1">Oy</b><input type="month" id="mn" value="' + month + '" style="flex:0 0 auto;width:auto;padding:6px"></div>' +
+        '<div class="row" style="margin-top:8px"><button class="btn" id="add">➕ Yangi maqsad</button><button class="btn sec" id="copy">📋 O\'tgan oydan nusxa</button></div></div>';
+      h += data.goals.length ? data.goals.map(g => {
+        const as = assignees(g);
+        return '<div class="card tk"><div class="row" style="align-items:flex-start"><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:17px">' + esc(g.title) + '</div>' + (g.desc ? '<div class="muted">' + esc(g.desc) + '</div>' : '') +
+          '<div class="s muted">Maqsad: ' + fmt(g.target) + ' ' + esc(g.unit || '') + (g.photo ? ' · 📷' : '') + ' · ' + esc(whoText(g)) + '</div></div>' + (g.bonus ? '<div class="bonus">🎁 ' + esc(g.bonus) + '</div>' : '') +
+          '<button class="btn sm sec" data-ed="goal" data-id="' + g.id + '" style="flex:0 0 auto;margin-left:6px">✏️</button></div>' +
+          as.map(e => {
+            const r = ((data.reports[e.id] || {}).m || {})[g.id] || { e: [] };
+            const sum = (r.e || []).filter(z => z.st !== 'ret').reduce((a, z) => a + (Number(z.n) || 0), 0), pct = Math.min(100, Math.round(sum / g.target * 100));
+            return '<details class="emp"' + (pct >= 100 && !r.award ? ' open' : '') + '><summary><b>' + esc(e.name) + '</b> <span class="muted">' + fmt(sum) + ' / ' + fmt(g.target) + '</span> ' + (r.award ? '<span class="pill base">🎁 bonus berildi</span>' : pct >= 100 ? '<span class="pill" style="background:#fff4d1;color:#9a6700">🔥 bajarildi</span>' : '') +
+              '<div class="bar"><i style="width:' + pct + '%"></i></div></summary>' +
+              (r.e || []).slice().reverse().map(z => '<div class="it" style="cursor:default;align-items:flex-start"><div class="main"><div class="s"><b style="color:var(--ink)">+' + fmt(z.n) + '</b> · ' + new Date(z.t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' ' + stBadge(z) + '</div>' + (z.note ? '<div class="s">' + esc(z.note) + '</div>' : '') + phImg(z.ph) + revBtns('m', e.id, g.id, z.id, z) + '</div></div>').join('') +
+              '<button class="btn sm ' + (r.award ? 'sec' : '') + '" data-aw="' + g.id + '" data-emp="' + e.id + '" data-on="' + (r.award ? '0' : '1') + '" style="margin-top:6px">' + (r.award ? 'Bonusni bekor qilish' : '🎁 Bonus berish') + '</button></details>';
+          }).join('') + '</div>';
+      }).join('') : '<div class="card empty">' + esc(monName(month)) + ' uchun maqsad yo\'q</div>';
+    }
+    el.innerHTML = h;
+    loadPhotos(el, true);
+    if ($('#dt')) $('#dt').onchange = e => { date = e.target.value; load(); };
+    if ($('#mn')) $('#mn').onchange = e => { month = e.target.value; load(); };
+    if ($('#add')) $('#add').onclick = () => edit(tab === 'd' ? 'cl' : tab === 't' ? 'task' : 'goal', null);
+    if ($('#copy')) $('#copy').onclick = e => busy(e.currentTarget, async () => {
+      const d = new Date(month + '-01T00:00:00'); d.setMonth(d.getMonth() - 1);
+      const from = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      await tadm('goal_copy', { from, month }); toast(monName(from) + ' maqsadlari nusxalandi', 'ok'); await load();
+    });
+    el.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { const k = b.dataset.ed; const l = k === 'cl' ? data.checklist : k === 'task' ? data.tasks : data.goals; edit(k, l.find(z => z.id === b.dataset.id)); });
+    el.querySelectorAll('[data-rv]').forEach(b => b.onclick = async () => {
+      let rc = '';
+      if (b.dataset.rv === 'ret') {
+        rc = await new Promise(res => { const m = sheet('<h3>Qaytarish sababi</h3><input id="rc" maxlength="300" placeholder="Masalan: rasm aniq emas, qayta bajaring"><div class="row" style="margin-top:10px"><button class="btn sec" data-a="0">Bekor</button><button class="btn" data-a="1">Qaytarish</button></div>'); m.querySelector('#rc').focus(); m.querySelectorAll('button').forEach(x => x.onclick = () => { const v = m.querySelector('#rc').value.trim(); m.remove(); res(x.dataset.a === '1' ? (v || 'Qayta bajaring') : null); }); });
+        if (rc == null) return;
+      }
+      await busy(b, async () => { await tadm('review', { kind: b.dataset.k, emp: b.dataset.emp, id: b.dataset.id, entry: b.dataset.e, st: b.dataset.rv, rc, date, month }); await load(); });
+    });
+    el.querySelectorAll('[data-close]').forEach(b => b.onclick = () => busy(b, async () => { await tadm('task_close', { id: b.dataset.close, closed: b.dataset.c === '1' }); await load(); }));
+    el.querySelectorAll('[data-aw]').forEach(b => b.onclick = async () => {
+      const g = data.goals.find(z => z.id === b.dataset.aw), e = data.employees.find(z => z.id === b.dataset.emp), on = b.dataset.on === '1';
+      if (on && !await confirmBox('<b>' + esc(e.name) + '</b> uchun «' + esc(g.title) + '» bo\'yicha bonus' + (g.bonus ? ' (<b>' + esc(g.bonus) + '</b>)' : '') + ' tasdiqlansinmi?', 'Tasdiqlash')) return;
+      await busy(b, async () => { await tadm('award', { id: g.id, emp: e.id, on, month }); toast(on ? 'Bonus tasdiqlandi 🎁' : 'Bonus bekor qilindi', 'ok'); await load(); });
+    });
+  };
+
+  // Tahrirlash oynasi (band / topshiriq / maqsad)
+  const edit = (kind, x) => {
+    x = x || {};
+    const all = !x.who || x.who === 'all';
+    const names = { cl: 'Ro\'yxat bandi', task: 'Topshiriq', goal: 'Oylik maqsad' };
+    const m = sheet('<h3>' + (x.id ? '✏️ ' : '➕ ') + names[kind] + '</h3>' +
+      '<label>Nomi</label><input id="et" maxlength="160" value="' + esc(x.title || '') + '" placeholder="' + (kind === 'goal' ? 'Masalan: Yangi mahsulotdan 50 dona sotish' : kind === 'task' ? 'Masalan: Ombordagi yashiklarni tartiblash' : 'Masalan: Vitrinani artish') + '">' +
+      '<label>Tavsif <span class="muted">(ixtiyoriy)</span></label><input id="ed" maxlength="1000" value="' + esc(x.desc || '') + '">' +
+      (kind === 'task' ? '<label>Muddat <span class="muted">(ixtiyoriy)</span></label><input id="edu" type="date" value="' + esc(x.due || data.today) + '">' : '') +
+      (kind === 'goal' ? '<div class="row"><div><label>Maqsad (son)</label><input id="eg" type="number" min="1" step="any" value="' + esc(x.target || 1) + '"></div><div><label>Birlik</label><input id="eu" maxlength="30" value="' + esc(x.unit || '') + '" placeholder="dona, marta…"></div></div>' +
+        '<label>Bonus</label><input id="eb" maxlength="120" value="' + esc(x.bonus || '') + '" placeholder="Masalan: 200 000 so\'m">' : '') +
+      '<label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px;margin-top:12px"><input type="checkbox" id="ep" style="width:22px;height:22px"' + (x.photo ? ' checked' : '') + '> 📷 Rasm hisobot majburiy</label>' +
+      (kind === 'cl' ? '<label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px"><input type="checkbox" id="ea" style="width:22px;height:22px"' + (x.active !== false ? ' checked' : '') + '> Faol (har kuni ko\'rinadi)</label>' : '') +
+      '<label>Kimga</label><label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px"><input type="radio" name="ew" value="all" style="width:20px;height:20px"' + (all ? ' checked' : '') + '> Hamma xodimlarga</label>' +
+      '<label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px"><input type="radio" name="ew" value="sel" style="width:20px;height:20px"' + (all ? '' : ' checked') + '> Tanlangan xodimlarga:</label>' +
+      '<div id="ews" style="padding-left:28px">' + data.employees.map(e => '<label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px"><input type="checkbox" value="' + e.id + '" style="width:20px;height:20px"' + (!all && x.who.includes(e.id) ? ' checked' : '') + '> ' + esc(e.name) + (e.active ? '' : ' <span class="muted">(yopilgan)</span>') + '</label>').join('') + '</div>' +
+      '<div class="row" style="margin-top:14px">' + (x.id ? '<button class="btn sec" id="edel" style="color:var(--bad);border-color:var(--bad);flex:0 0 52px">🗑️</button>' : '') + '<button class="btn sec" id="ex">Bekor</button><button class="btn" id="es">Saqlash</button></div>');
+    m.querySelector('#ex').onclick = () => m.remove();
+    m.querySelectorAll('#ews input').forEach(c => c.onchange = () => { m.querySelector('input[name=ew][value=sel]').checked = true; });
+    m.querySelector('#es').onclick = e => busy(e.currentTarget, async () => {
+      const sel = m.querySelector('input[name=ew]:checked').value === 'sel' ? [...m.querySelectorAll('#ews input:checked')].map(c => c.value) : 'all';
+      if (Array.isArray(sel) && !sel.length) throw new Error('Kamida bitta xodimni belgilang');
+      const item = Object.assign({}, x, { title: m.querySelector('#et').value, desc: m.querySelector('#ed').value, photo: m.querySelector('#ep').checked, who: sel });
+      if (kind === 'cl') item.active = m.querySelector('#ea').checked;
+      if (kind === 'task') item.due = m.querySelector('#edu').value;
+      if (kind === 'goal') { item.target = Number(m.querySelector('#eg').value); item.unit = m.querySelector('#eu').value; item.bonus = m.querySelector('#eb').value; }
+      if (!item.title.trim()) throw new Error('Nomini kiriting');
+      await tadm(kind === 'cl' ? 'cl_save' : kind === 'task' ? 'task_save' : 'goal_save', { item, month });
+      m.remove(); toast('Saqlandi', 'ok'); await load();
+    });
+    if (m.querySelector('#edel')) m.querySelector('#edel').onclick = async () => {
+      if (!await confirmBox('«' + esc(x.title) + '» o\'chirilsinmi?', 'O\'chirish')) return;
+      await busy(null, async () => { await tadm('del', { kind, id: x.id, month }); m.remove(); toast('O\'chirildi', 'ok'); await load(); });
+    };
+    m.querySelector('#et').focus();
+  };
+  await load();
 }
 
 function ean13ok(v) { let s = 0; for (let i = 0; i < 12; i++) s += (+v[i]) * (i % 2 ? 3 : 1); return (10 - s % 10) % 10 === +v[12]; }
